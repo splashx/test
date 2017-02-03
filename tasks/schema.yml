@@ -1,0 +1,46 @@
+#- name: Install Python MysqlDB module (required for Ansible)
+#  apt: name={{ item }} state=present update_cache=yes cache_valid_time=3600
+#  with_items:
+#    - python-mysqldb
+#  tags: [midpoint-db,midpoint]
+
+- name: MySQL - create db
+  mysql_db: name=midpoint collation=utf8_bin encoding=utf8 state=present login_host="{{ midpoint_db_host }}" login_user="{{ midpoint_db_admin_user }}" login_password="{{ midpoint_db_admin_password }}" ssl_ca="{% if midpoint_use_sql_ssl %}/home/ubuntu/iam-deployment/roles/ansible-trust-ca/files/telesec.pem{% else %}omit{% endif %}"
+  tags: [midpoint-db,midpoint]
+  run_once: yes 
+  register: mysql_db_create
+  delegate_to: localhost
+
+- name: MySQL - copy schema file mysql-{{ midpoint_version }}-all.sql
+  copy: src=midpoint/mysql-{{ midpoint_version }}-all.sql dest=/tmp
+  tags: [midpoint-db,midpoint]
+  delegate_to: localhost
+
+- name: MySQL - create db schema 
+  mysql_db: name=midpoint state=import target=/tmp/mysql-{{ midpoint_version }}-all.sql login_host="{{ midpoint_db_host }}" login_user="{{ midpoint_db_admin_user }}" login_password="{{ midpoint_db_admin_password }}" ssl_ca="{% if midpoint_use_sql_ssl %}/home/ubuntu/iam-deployment/roles/ansible-trust-ca/files/telesec.pem{% else %}omit{% endif %}"
+  ignore_errors: yes
+  tags: [midpoint-db,midpoint]
+  when: mysql_db_create.changed
+  register: midpoint_db_schema
+  run_once: yes
+  delegate_to: localhost
+
+- name: MysqSQL - create user - access from midpoint instances
+  mysql_user: name={{ midpoint_mysql_user }} password={{ midpoint_mysql_pwd }} priv=midpoint.*:ALL host={{ item }} state=present login_host="{{ midpoint_db_host }}" login_user="{{ midpoint_db_admin_user }}" login_password="{{ midpoint_db_admin_password }}" ssl_ca="{% if midpoint_use_sql_ssl %}/home/ubuntu/iam-deployment/roles/ansible-trust-ca/files/telesec.pem{% else %}omit{% endif %}"
+  with_items: "%" # FIXME - should be restricted to LB hosts
+  tags: [midpoint-db,midpoint]
+  when: mysql_db_create.changed
+  register: mysql_user_create
+  delegate_to: localhost
+  run_once: yes
+
+- name: Require SSL to log in
+  mysql_user: name={{ midpoint_mysql_user }} password={{ midpoint_mysql_pwd }} priv='*.*:REQUIRESSL' append_privs=true state=present login_host="{{ midpoint_db_host }}" login_user="{{ midpoint_db_admin_user }}" login_password="{{ midpoint_db_admin_password }}" ssl_ca="{% if midpoint_use_sql_ssl %}/home/ubuntu/iam-deployment/roles/ansible-trust-ca/files/telesec.pem{% else %}omit{% endif %}"
+  tags: [midpoint-db,midpoint]
+  run_once: yes
+  when: mysql_user_create.changed and midpoint_use_sql_ssl
+  delegate_to: localhost
+
+- name: MySQL - remove schema file mysql-{{ midpoint_version }}-all.sql
+  file: path=/tmp/mysql-{{ midpoint_version }}-all.sql state=absent
+  tags: [midpoint-db,midpoint]

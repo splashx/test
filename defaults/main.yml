@@ -1,0 +1,5 @@
+midpoint_version: 3.4.1
+midpoint_mysql_user: midpoint
+midpoint_mysql_pass: midpoint
+midpoint_seckey_alias: strong
+midpoint_use_sql_ssl: false

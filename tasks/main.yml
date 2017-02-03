@@ -1,0 +1,155 @@
+---
+- name: OpenJDK, Tomcat, Apache - package installation
+  apt: name={{ item }} state=present update_cache=yes cache_valid_time=3600
+  with_items:
+    - openjdk-8-jdk
+    - tomcat8
+    - apache2
+    - graphviz
+  tags: [midpoint]
+
+- name: Tomcat - update /var/lib/tomcat8/conf/server.xml
+  copy: src=tomcat/server.xml dest=/var/lib/tomcat8/conf/server.xml owner=root group=tomcat8 mode=u=rw,g=r,o=r
+  tags: [midpoint]
+  
+- name: Apache - enable necessary modules
+  apache2_module: state=present name="{{ item }}"
+  notify: restart apache2
+  with_items: [rewrite,proxy,proxy_http]
+  tags: [midpoint]
+
+- name: Apache - install configs
+  template: src=apache/{{ item }}.conf dest=/etc/apache2/sites-available/{{ item }}.conf owner=root group=root mode=u=rw,g=r,o=r
+  with_items:
+    - virtualhost
+    - virtualhost-ssl
+  tags: [midpoint]
+
+- name: Check whether SSL certificate exists
+  stat: path="/etc/ssl/certs/{{ ssl_hostname | default(ansible_fqdn) }}.pem"
+  register: cert
+  tags: [midpoint]
+
+- include: schema.yml
+
+- name: Enable SSL module
+  command: "a2enmod ssl"
+  when: cert.stat.exists
+  notify: restart apache2
+  tags: [midpoint]
+
+- name: Apache - enable sites
+  command: "a2ensite {{ item }}"
+  with_items:
+    - virtualhost
+    - virtualhost-ssl
+  notify: restart apache2
+  when: cert.stat.exists
+  tags: [midpoint]
+
+- name: Tomcat - stop
+  service: name=tomcat8 state=stopped
+  tags: [midpoint]
+
+- name: midPoint - create directory /var/opt/midpoint
+  file: path=/var/opt/midpoint state=directory owner=tomcat8 group=tomcat8 mode=0755
+  tags: [midpoint]
+  
+- name: midPoint - copy config files
+  template: src=midpoint/{{ item }}.j2 dest=/var/opt/midpoint/{{ item }} owner=tomcat8 group=tomcat8 mode=0600
+  with_items: [config.xml,jmxremote.access,jmxremote.password]
+  register: configs
+  tags: [midpoint]
+ 
+- name: midPoint - create directory /var/opt/midpoint/schema
+  file: path=/var/opt/midpoint/schema state=directory owner=tomcat8 group=tomcat8 mode=u=rwx,g=rx,o=rx
+  tags: [midpoint]
+ 
+- name: midPoint - copy user schema extension to /var/opt/midpoint/schema/user-schema-extension.xsd
+  copy: src=midpoint/user-schema-extension.xsd dest=/var/opt/midpoint/schema/user-schema-extension.xsd owner=tomcat8 group=tomcat8 mode=u=rw,g=r,o=r
+  tags: [midpoint]
+  
+- name: midPoint - remove embedded db files
+  file: path={{ item }} state=absent
+  with_items:
+    - /var/opt/midpoint/midpoint.h2.db
+    - /var/opt/midpoint/midpoint-activiti.h2.db
+  tags: [midpoint]
+
+- name: midPoint - check if local keystore exists
+  local_action: stat path=ssl/sym/midpoint-keystore-{{ iam_deployment_name }}.jceks
+  run_once: yes
+  register: local_keystore
+  tags: [midpoint]
+
+- name: midPoint - create DB encryption key
+  command: bash -c "keytool -genseckey -alias {{ midpoint_seckey_alias }} -keystore /var/opt/midpoint/keystore.jceks -storetype jceks -storepass {{ midpoint_store_pass }} -keyalg AES -keysize 256 -keypass {{ midpoint_key_pass }} -noprompt && keytool -import -alias Telesec -file /etc/ssl/certs/telesec.pem -keystore /var/opt/midpoint/keystore.jceks -storetype jceks -storepass {{ midpoint_store_pass }} -noprompt"
+  when: not local_keystore.stat.exists
+  run_once: yes
+  tags: [midpoint]
+
+- name: midPoint - save local keystore
+  fetch: src=/var/opt/midpoint/keystore.jceks dest="ssl/sym/midpoint-keystore-{{ iam_deployment_name }}.jceks" flat=true
+  when: not local_keystore.stat.exists
+  run_once: yes
+  register: local_keystore_saved
+  tags: [midpoint]
+
+- name: Copy local keystore to all machines
+  copy: src=ssl/sym/midpoint-keystore-{{ iam_deployment_name }}.jceks dest=/var/opt/midpoint/keystore.jceks owner=tomcat8 group=tomcat8 mode=0640
+  when: local_keystore.stat.exists or local_keystore_saved.changed
+  tags: [midpoint]
+
+- name: midPoint - copy MySQL driver /usr/share/tomcat8/lib/mysql-connector-java-5.1.39-bin.jar
+  copy: src=midpoint/mysql-connector-java-5.1.39-bin.jar dest=/usr/share/tomcat8/lib/mysql-connector-java-5.1.39-bin.jar owner=root group=root mode=u=rw,g=r,o=r
+  tags: [midpoint]
+
+- name: Tomcat - copy environment file /usr/share/tomcat8/bin/setenv.sh
+  template: src=tomcat/setenv.sh.j2 dest=/usr/share/tomcat8/bin/setenv.sh owner=root group=root mode=u=rwx,g=rx,o=rx
+  tags: [midpoint]
+
+- name: Check if midpoint.war exists
+  stat: path=/var/lib/tomcat8/webapps/midpoint.war
+  register: warfile
+  tags: [midpoint]
+
+- name: midPoint - unarchive
+  unarchive: src=http://www.evolveum.com/downloads/midpoint/{{ midpoint_version }}/midpoint-{{ midpoint_version }}-dist.tar.gz dest=/tmp/midpoint-{{ midpoint_version }}-dist.tar.gz dest=/tmp/ copy=no
+  when: not warfile.stat.exists
+  tags: [midpoint]
+
+- name: midPoint - deploy war to /var/lib/tomcat8/webapps/midpoint.war
+  shell: cp /tmp/midpoint-{{ midpoint_version }}/war/midpoint.war /var/lib/tomcat8/webapps/midpoint.war
+  when: not warfile.stat.exists
+  tags: [midpoint]
+
+- name: midPoint - remove temporary unarchived directory
+  file: path=/tmp/midpoint-{{ midpoint_version }} state=absent
+  when: not warfile.stat.exists
+  tags: [midpoint]
+  
+- name: midPoint - remove temporary archive
+  file: path=/tmp/midpoint-{{ midpoint_version }}-dist.tar.gz state=absent
+  when: not warfile.stat.exists
+  tags: [midpoint]
+
+- name: Create directory for connector
+  file: path=/var/opt/midpoint/icf-connectors/ state=directory mode=0755
+  tags: [midpoint]
+
+
+#- name: Tomcat - restart
+#  service: name=tomcat8 state=restarted
+#  when: ipaconnector.changed or configs.changed
+#  tags: [midpoint,ipaconnector]
+
+#- name: Tomcat - start
+#  service: name=tomcat8 state=started
+#  when: not ipaconnector.changed
+#  tags: [midpoint]
+
+#- name: midPoint - wait to finish deployment
+
+#- name: Tomcat - wait for tomcat to start
+#  wait_for: port=8080
+

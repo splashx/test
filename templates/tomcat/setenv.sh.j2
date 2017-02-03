@@ -1,0 +1,8 @@
+!/bin/sh
+# Midpoint
+MIDPOINT_HOME="/var/opt/midpoint/"
+JAVA_OPTS="$JAVA_OPTS -Dhttp.proxySet=true -Dhttp.proxyHost={{ midpoint_http_proxy }} -Dhttp.proxyPort=3128 -Dhttp.nonProxyHosts='{{ domain_name }} |localhost|127.0.0.1' -Dmidpoint.home=$MIDPOINT_HOME -Djavax.net.ssl.trustStore=$MIDPOINT_HOME/keystore.jceks -Djavax.net.ssl.trustStoreType=jceks -server -Xms512m -Xmx2048m"
+CATALINA_OPTS="$CATALINA_OPTS -Dmidpoint.nodeId={{ ansible_hostname }} -Dmidpoint.jmxHostName={{ ansible_fqdn }} -Dcom.sun.management.jmxremote=true -Dcom.sun.management.jmxremote.port=20001 -Dcom.sun.management.jmxremote.ssl=false -Dcom.sun.management.jmxremote.password.file=$MIDPOINT_HOME/jmxremote.password -Dcom.sun.management.jmxremote.access.file=$MIDPOINT_HOME/jmxremote.access -Dcom.sun.management.jmxremote.rmi.port=20001 -XX:MaxPermSize=256m"
+export MIDPOINT_HOME JAVA_OPTS CATALINA_OPTS
+# MySQL connector
+CLASSPATH=/usr/share/tomcat8/lib/mysql-connector-java-5.1.39-bin.jar:$CLASSPATH

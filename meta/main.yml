@@ -1,0 +1,7 @@
+dependencies:
+  - { role: ansible-entropy }
+  - { role: ansible-etc-hosts }
+  - { role: ansible-fqdn }
+  - { role: ansible-trust-ca }
+  - { role: ansible-ssl-certificate, ssl_strict: true }
+  - { role: ansible-set-proxy, when: http_proxy_address is defined or https_proxy_address is defined }
